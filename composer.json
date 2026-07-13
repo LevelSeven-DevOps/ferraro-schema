@@ -8,5 +8,6 @@
             "Ferraro\\Schema\\": "includes/"
         }
     },
-    "require": {}
+    "require": {},
+    "require-dev": {}
 }
