@@ -1,0 +1,1503 @@
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Contracts\BuilderInterface.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Contracts;
+
+/**
+ * Interface BuilderInterface
+ * * Defines the contract for all post-type schema builders.
+ */
+interface BuilderInterface
+{
+    /**
+     * Determine if this builder supports the given post ID.
+     *
+     * @param int $postId
+     * @return bool
+     */
+    public function supports(int $postId): bool;
+
+    /**
+     * Read data from WordPress and ACF for a post and construct its schema Entity representation.
+     *
+     * @param int $postId
+     * @return EntityInterface|null
+     */
+    public function build(int $postId): ?EntityInterface;
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Contracts\EntityInterface.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Contracts;
+
+/**
+ * Interface EntityInterface
+ * * Defines the contract for all Schema.org entities within the FSDE knowledge graph.
+ */
+interface EntityInterface
+{
+    /**
+     * Get the canonical @id of the schema entity.
+     *
+     * @return string
+     */
+    public function getId(): string;
+
+    /**
+     * Get the Schema.org type (e.g., 'Person', 'Attorney', 'Organization').
+     *
+     * @return string
+     */
+    public function getType(): string;
+
+    /**
+     * Convert the entity into an associative array representation suitable for JSON-LD serialization.
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(): array;
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Core\Plugin.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Core;
+
+final class Plugin
+{
+    public static function boot(): void
+    {
+        $plugin = new self();
+
+        $plugin->registerHooks();
+    }
+
+    private function registerHooks(): void
+    {
+        add_action('init', [$this, 'init']);
+    }
+
+    public function init(): void
+    {
+        // Future initialization.
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Engine\SchemaEngine.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Engine;
+
+use Ferraro\Schema\Contracts\BuilderInterface;
+use Ferraro\Schema\Graph\Graph;
+use Ferraro\Schema\Support\Cache;
+use Ferraro\Schema\Support\Validator;
+
+/**
+ * Class SchemaEngine
+ * * The execution core orchestrating registry mapping, Builders, graph creation, validation, and cache management.
+ */
+final class SchemaEngine
+{
+    /**
+     * Registered Builders for structural processing.
+     *
+     * @var array<BuilderInterface>
+     */
+    private array $builders = [];
+
+    /**
+     * SchemaEngine constructor.
+     *
+     * @param Cache $cache
+     * @param Validator $validator
+     */
+    public function __construct(
+        private readonly Cache $cache,
+        private readonly Validator $validator
+    ) {
+    }
+
+    /**
+     * Register a custom builder inside the engine pipelines.
+     *
+     * @param BuilderInterface $builder
+     * @return void
+     */
+    public function registerBuilder(BuilderInterface $builder): void
+    {
+        $this->builders[] = $builder;
+    }
+
+    /**
+     * Build and sanitize the graph for a specific post.
+     *
+     * @param int $postId
+     * @return array<string, mixed>|null
+     */
+    public function generateSchema(int $postId): ?array
+    {
+        $cacheKey = (string) $postId;
+        $cachedSchema = $this->cache->get($cacheKey);
+
+        if ($cachedSchema !== null) {
+            return $cachedSchema;
+        }
+
+        $graph = new Graph();
+        $processed = false;
+
+        foreach ($this->builders as $builder) {
+            if ($builder->supports($postId)) {
+                $entity = $builder->build($postId);
+                if ($entity !== null) {
+                    $graph->add($entity);
+                    $processed = true;
+                }
+            }
+        }
+
+        if (!$processed) {
+            return null;
+        }
+
+        $schemaArray = $graph->toArray();
+        $cleanSchemaArray = $this->validator->validateAndClean($schemaArray);
+
+        if (empty($cleanSchemaArray['@graph'])) {
+            return null;
+        }
+
+        $this->cache->set($cacheKey, $cleanSchemaArray);
+
+        return $cleanSchemaArray;
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Entities\Entity.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Entities;
+
+use Ferraro\Schema\Contracts\EntityInterface;
+
+/**
+ * Class Entity
+ * * Abstract base class for all Schema.org entities. Handles ID, Context, and Base serialization.
+ */
+abstract class Entity implements EntityInterface
+{
+    /**
+     * Entity constructor.
+     *
+     * @param string $id   The canonical URI identifying this object.
+     * @param string $type The Schema.org type definition.
+     */
+    public function __construct(
+        protected readonly string $id,
+        protected readonly string $type
+    ) {
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getId(): string
+    {
+        return $this->id;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getType(): string
+    {
+        return $this->type;
+    }
+
+    /**
+     * Converts common entity objects or sub-entities recursively.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    protected function serializeValue(mixed $value): mixed
+    {
+        if ($value instanceof EntityInterface) {
+            return $value->toArray();
+        }
+
+        if (is_array($value)) {
+            return array_map([$this, 'serializeValue'], $value);
+        }
+
+        return $value;
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Entities\ImageEntity.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Entities;
+
+/**
+ * Class ImageEntity
+ * * Represents a Schema.org ImageObject.
+ */
+final class ImageEntity extends Entity
+{
+    public function __construct(
+        string $id,
+        private readonly string $url,
+        private readonly ?int $width = null,
+        private readonly ?int $height = null,
+        private readonly ?string $caption = null
+    ) {
+        parent::__construct($id, 'ImageObject');
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function toArray(): array
+    {
+        return [
+            '@type' => $this->getType(),
+            '@id' => $this->getId(),
+            'url' => $this->url,
+            'width' => $this->width,
+            'height' => $this->height,
+            'caption' => $this->caption,
+        ];
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Entities\OrganizationEntity.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Entities;
+
+/**
+ * Class OrganizationEntity
+ * * Represents a Schema.org Organization (specifically the law firm).
+ */
+final class OrganizationEntity extends Entity
+{
+    /**
+     * @param string $id
+     * @param string $name
+     * @param string $url
+     * @param ImageEntity|string|null $logo
+     * @param array<string> $sameAs Social media connections and directories.
+     */
+    public function __construct(
+        string $id,
+        private readonly string $name,
+        private readonly string $url,
+        private readonly ImageEntity|string|null $logo = null,
+        private readonly array $sameAs = []
+    ) {
+        parent::__construct($id, 'Organization');
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function toArray(): array
+    {
+        return [
+            '@type' => $this->getType(),
+            '@id' => $this->getId(),
+            'name' => $this->name,
+            'url' => $this->url,
+            'logo' => $this->serializeValue($this->logo),
+            'sameAs' => $this->sameAs,
+        ];
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Entities\PersonEntity.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Entities;
+
+/**
+ * Class PersonEntity
+ * * Represents a Schema.org Person (specifically tailored for attorney custom post types).
+ * Includes fields that match the custom fields parsed from ACF.
+ */
+final class PersonEntity extends Entity
+{
+    /**
+     * @param string $id
+     * @param string $name
+     * @param string|null $jobTitle
+     * @param string|null $description Short bio / introduction.
+     * @param ImageEntity|null $image
+     * @param string|null $url Professional Profile URL.
+     * @param array<string> $alumniOf Schools attended.
+     * @param array<string> $awards Recognitions and accolades.
+     * @param array<string> $knowsAbout Expertise and practice areas.
+     * @param array<string> $knowsLanguage Languages spoken.
+     * @param array<string> $honorificSuffix (e.g., 'Esq.')
+     * @param OrganizationEntity|null $worksFor The employing law firm.
+     */
+    public function __construct(
+        string $id,
+        private readonly string $name,
+        private readonly ?string $jobTitle = null,
+        private readonly ?string $description = null,
+        private readonly ?ImageEntity $image = null,
+        private readonly ?string $url = null,
+        private readonly array $alumniOf = [],
+        private readonly array $awards = [],
+        private readonly array $knowsAbout = [],
+        private readonly array $knowsLanguage = [],
+        private readonly array $honorificSuffix = [],
+        private readonly ?OrganizationEntity $worksFor = null
+    ) {
+        parent::__construct($id, 'Attorney'); // Specifically utilizes Attorney schema subtype of Person.
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function toArray(): array
+    {
+        return [
+            '@type' => $this->getType(),
+            '@id' => $this->getId(),
+            'name' => $this->name,
+            'jobTitle' => $this->jobTitle,
+            'description' => $this->description,
+            'image' => $this->serializeValue($this->image),
+            'url' => $this->url,
+            'alumniOf' => $this->alumniOf,
+            'award' => $this->awards,
+            'knowsAbout' => $this->knowsAbout,
+            'knowsLanguage' => $this->knowsLanguage,
+            'honorificSuffix' => $this->honorificSuffix,
+            'worksFor' => $this->serializeValue($this->worksFor),
+        ];
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Graph\EntityRegistry.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Graph;
+
+/**
+ * Class EntityRegistry
+ * * Standardizes the generation of canonical global IDs (@id) used throughout the knowledge graph.
+ */
+final class EntityRegistry
+{
+    private string $siteUrl;
+
+    public function __construct()
+    {
+        $this->siteUrl = trailingslashit(get_home_url());
+    }
+
+    /**
+     * Generate a unique canonical ID for the primary Organization.
+     *
+     * @return string
+     */
+    public function getOrganizationId(): string
+    {
+        return $this->siteUrl . '#organization';
+    }
+
+    /**
+     * Generate a canonical ID for a specific post-type based entity.
+     *
+     * @param string $postType The custom post type (e.g. 'team', 'practice-area').
+     * @param string $slug     The post slug (e.g. 'james-ferraro').
+     * @param string $anchor   The unique anchor representation (e.g. 'person').
+     * @return string
+     */
+    public function getEntityId(string $postType, string $slug, string $anchor): string
+    {
+        return sprintf('%s%s/%s/#%s', $this->siteUrl, $postType, $slug, $anchor);
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Graph\Graph.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Graph;
+
+use Ferraro\Schema\Contracts\EntityInterface;
+
+/**
+ * Class Graph
+ * * Graph container that maintains individual schema entities and formats them as a valid Schema.org knowledge graph.
+ */
+final class Graph
+{
+    /**
+     * Internal lookup array mapping Entity @id to the Entity object.
+     *
+     * @var array<string, EntityInterface>
+     */
+    private array $entities = [];
+
+    /**
+     * Add an entity to the graph. Prevents duplicates by overwriting keys.
+     *
+     * @param EntityInterface $entity
+     * @return void
+     */
+    public function add(EntityInterface $entity): void
+    {
+        $this->entities[$entity->getId()] = $entity;
+    }
+
+    /**
+     * Find an entity in the graph by its @id.
+     *
+     * @param string $id
+     * @return EntityInterface|null
+     */
+    public function find(string $id): ?EntityInterface
+    {
+        return $this->entities[$id] ?? null;
+    }
+
+    /**
+     * Convert the collective graph to standard JSON-LD representation.
+     *
+     * @return array{
+     * @context: string,
+     * @graph: array<int, array<string, mixed>>
+     * }
+     */
+    public function toArray(): array
+    {
+        $graphArray = [];
+        foreach ($this->entities as $entity) {
+            $graphArray[] = $entity->toArray();
+        }
+
+        return [
+            '@context' => 'https://schema.org',
+            '@graph' => $graphArray,
+        ];
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Support\Cache.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Support;
+
+/**
+ * Class Cache
+ * * WP-compliant transients caching mechanism to optimize schema building performance.
+ */
+final class Cache
+{
+    private const TRANSIENT_PREFIX = 'fsde_schema_';
+
+    /**
+     * Get a cached schema entry by key.
+     *
+     * @param string $key
+     * @return array<string, mixed>|null
+     */
+    public function get(string $key): ?array
+    {
+        $cached = get_transient(self::TRANSIENT_PREFIX . $key);
+        
+        return is_array($cached) ? $cached : null;
+    }
+
+    /**
+     * Store schema output in cache.
+     *
+     * @param string $key
+     * @param array<string, mixed> $data
+     * @param int $expiration Expiration time in seconds. Defaults to 12 hours.
+     * @return bool
+     */
+    public function set(string $key, array $data, int $expiration = 43200): bool
+    {
+        return set_transient(self::TRANSIENT_PREFIX . $key, $data, $expiration);
+    }
+
+    /**
+     * Delete a cached schema entry.
+     *
+     * @param string $key
+     * @return bool
+     */
+    public function delete(string $key): bool
+    {
+        return delete_transient(self::TRANSIENT_PREFIX . $key);
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\includes\Support\Validator.php
+========================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace Ferraro\Schema\Support;
+
+/**
+ * Class Validator
+ * * Validates, cleans, and prunes Schema arrays recursively to guarantee strict search console compliance.
+ */
+final class Validator
+{
+    /**
+     * Clean schema arrays by recursively removing null values, empty strings, and empty arrays.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    public function validateAndClean(array $data): array
+    {
+        return $this->recursiveClean($data);
+    }
+
+    /**
+     * Standard recursive cleaner logic.
+     *
+     * @param array<mixed> $array
+     * @return array<mixed>
+     */
+    private function recursiveClean(array $array): array
+    {
+        foreach ($array as $key => &$value) {
+            if (is_array($value)) {
+                $value = $this->recursiveClean($value);
+            }
+
+            if ($this->isEmpty($value)) {
+                unset($array[$key]);
+            }
+        }
+
+        return $array;
+    }
+
+    /**
+     * Determine if a schema value is empty and should be stripped.
+     *
+     * @param mixed $value
+     * @return bool
+     */
+    private function isEmpty(mixed $value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_string($value) && trim($value) === '') {
+            return true;
+        }
+
+        if (is_array($value) && empty($value)) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\autoload_classmap.php
+========================================
+
+<?php
+
+// autoload_classmap.php @generated by Composer
+
+$vendorDir = dirname(__DIR__);
+$baseDir = dirname($vendorDir);
+
+return array(
+    'Composer\\InstalledVersions' => $vendorDir . '/composer/InstalledVersions.php',
+);
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\autoload_namespaces.php
+========================================
+
+<?php
+
+// autoload_namespaces.php @generated by Composer
+
+$vendorDir = dirname(__DIR__);
+$baseDir = dirname($vendorDir);
+
+return array(
+);
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\autoload_psr4.php
+========================================
+
+<?php
+
+// autoload_psr4.php @generated by Composer
+
+$vendorDir = dirname(__DIR__);
+$baseDir = dirname($vendorDir);
+
+return array(
+    'Ferraro\\Schema\\' => array($baseDir . '/includes'),
+);
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\autoload_real.php
+========================================
+
+<?php
+
+// autoload_real.php @generated by Composer
+
+class ComposerAutoloaderInite26b90360657883aaf373c3815abeb05
+{
+    private static $loader;
+
+    public static function loadClassLoader($class)
+    {
+        if ('Composer\Autoload\ClassLoader' === $class) {
+            require __DIR__ . '/ClassLoader.php';
+        }
+    }
+
+    /**
+     * @return \Composer\Autoload\ClassLoader
+     */
+    public static function getLoader()
+    {
+        if (null !== self::$loader) {
+            return self::$loader;
+        }
+
+        spl_autoload_register(array('ComposerAutoloaderInite26b90360657883aaf373c3815abeb05', 'loadClassLoader'), true, true);
+        self::$loader = $loader = new \Composer\Autoload\ClassLoader(\dirname(__DIR__));
+        spl_autoload_unregister(array('ComposerAutoloaderInite26b90360657883aaf373c3815abeb05', 'loadClassLoader'));
+
+        require __DIR__ . '/autoload_static.php';
+        call_user_func(\Composer\Autoload\ComposerStaticInite26b90360657883aaf373c3815abeb05::getInitializer($loader));
+
+        $loader->register(true);
+
+        return $loader;
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\autoload_static.php
+========================================
+
+<?php
+
+// autoload_static.php @generated by Composer
+
+namespace Composer\Autoload;
+
+class ComposerStaticInite26b90360657883aaf373c3815abeb05
+{
+    public static $prefixLengthsPsr4 = array (
+        'F' => 
+        array (
+            'Ferraro\\Schema\\' => 15,
+        ),
+    );
+
+    public static $prefixDirsPsr4 = array (
+        'Ferraro\\Schema\\' => 
+        array (
+            0 => __DIR__ . '/../..' . '/includes',
+        ),
+    );
+
+    public static $classMap = array (
+        'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
+    );
+
+    public static function getInitializer(ClassLoader $loader)
+    {
+        return \Closure::bind(function () use ($loader) {
+            $loader->prefixLengthsPsr4 = ComposerStaticInite26b90360657883aaf373c3815abeb05::$prefixLengthsPsr4;
+            $loader->prefixDirsPsr4 = ComposerStaticInite26b90360657883aaf373c3815abeb05::$prefixDirsPsr4;
+            $loader->classMap = ComposerStaticInite26b90360657883aaf373c3815abeb05::$classMap;
+
+        }, null, ClassLoader::class);
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\composer\ClassLoader.php
+========================================
+
+<?php
+
+/*
+ * This file is part of Composer.
+ *
+ * (c) Nils Adermann <naderman@naderman.de>
+ *     Jordi Boggiano <j.boggiano@seld.be>
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Composer\Autoload;
+
+/**
+ * ClassLoader implements a PSR-0, PSR-4 and classmap class loader.
+ *
+ *     $loader = new \Composer\Autoload\ClassLoader();
+ *
+ *     // register classes with namespaces
+ *     $loader->add('Symfony\Component', __DIR__.'/component');
+ *     $loader->add('Symfony',           __DIR__.'/framework');
+ *
+ *     // activate the autoloader
+ *     $loader->register();
+ *
+ *     // to enable searching the include path (eg. for PEAR packages)
+ *     $loader->setUseIncludePath(true);
+ *
+ * In this example, if you try to use a class in the Symfony\Component
+ * namespace or one of its children (Symfony\Component\Console for instance),
+ * the autoloader will first look for the class under the component/
+ * directory, and it will then fallback to the framework/ directory if not
+ * found before giving up.
+ *
+ * This class is loosely based on the Symfony UniversalClassLoader.
+ *
+ * @author Fabien Potencier <fabien@symfony.com>
+ * @author Jordi Boggiano <j.boggiano@seld.be>
+ * @see    https://www.php-fig.org/psr/psr-0/
+ * @see    https://www.php-fig.org/psr/psr-4/
+ */
+class ClassLoader
+{
+    /** @var \Closure(string):void */
+    private static $includeFile;
+
+    /** @var ?string */
+    private $vendorDir;
+
+    // PSR-4
+    /**
+     * @var array[]
+     * @psalm-var array<string, array<string, int>>
+     */
+    private $prefixLengthsPsr4 = array();
+    /**
+     * @var array[]
+     * @psalm-var array<string, array<int, string>>
+     */
+    private $prefixDirsPsr4 = array();
+    /**
+     * @var array[]
+     * @psalm-var array<string, string>
+     */
+    private $fallbackDirsPsr4 = array();
+
+    // PSR-0
+    /**
+     * @var array[]
+     * @psalm-var array<string, array<string, string[]>>
+     */
+    private $prefixesPsr0 = array();
+    /**
+     * @var array[]
+     * @psalm-var array<string, string>
+     */
+    private $fallbackDirsPsr0 = array();
+
+    /** @var bool */
+    private $useIncludePath = false;
+
+    /**
+     * @var string[]
+     * @psalm-var array<string, string>
+     */
+    private $classMap = array();
+
+    /** @var bool */
+    private $classMapAuthoritative = false;
+
+    /**
+     * @var bool[]
+     * @psalm-var array<string, bool>
+     */
+    private $missingClasses = array();
+
+    /** @var ?string */
+    private $apcuPrefix;
+
+    /**
+     * @var self[]
+     */
+    private static $registeredLoaders = array();
+
+    /**
+     * @param ?string $vendorDir
+     */
+    public function __construct($vendorDir = null)
+    {
+        $this->vendorDir = $vendorDir;
+        self::initializeIncludeClosure();
+    }
+
+    /**
+     * @return string[]
+     */
+    public function getPrefixes()
+    {
+        if (!empty($this->prefixesPsr0)) {
+            return call_user_func_array('array_merge', array_values($this->prefixesPsr0));
+        }
+
+        return array();
+    }
+
+    /**
+     * @return array[]
+     * @psalm-return array<string, array<int, string>>
+     */
+    public function getPrefixesPsr4()
+    {
+        return $this->prefixDirsPsr4;
+    }
+
+    /**
+     * @return array[]
+     * @psalm-return array<string, string>
+     */
+    public function getFallbackDirs()
+    {
+        return $this->fallbackDirsPsr0;
+    }
+
+    /**
+     * @return array[]
+     * @psalm-return array<string, string>
+     */
+    public function getFallbackDirsPsr4()
+    {
+        return $this->fallbackDirsPsr4;
+    }
+
+    /**
+     * @return string[] Array of classname => path
+     * @psalm-return array<string, string>
+     */
+    public function getClassMap()
+    {
+        return $this->classMap;
+    }
+
+    /**
+     * @param string[] $classMap Class to filename map
+     * @psalm-param array<string, string> $classMap
+     *
+     * @return void
+     */
+    public function addClassMap(array $classMap)
+    {
+        if ($this->classMap) {
+            $this->classMap = array_merge($this->classMap, $classMap);
+        } else {
+            $this->classMap = $classMap;
+        }
+    }
+
+    /**
+     * Registers a set of PSR-0 directories for a given prefix, either
+     * appending or prepending to the ones previously set for this prefix.
+     *
+     * @param string          $prefix  The prefix
+     * @param string[]|string $paths   The PSR-0 root directories
+     * @param bool            $prepend Whether to prepend the directories
+     *
+     * @return void
+     */
+    public function add($prefix, $paths, $prepend = false)
+    {
+        if (!$prefix) {
+            if ($prepend) {
+                $this->fallbackDirsPsr0 = array_merge(
+                    (array) $paths,
+                    $this->fallbackDirsPsr0
+                );
+            } else {
+                $this->fallbackDirsPsr0 = array_merge(
+                    $this->fallbackDirsPsr0,
+                    (array) $paths
+                );
+            }
+
+            return;
+        }
+
+        $first = $prefix[0];
+        if (!isset($this->prefixesPsr0[$first][$prefix])) {
+            $this->prefixesPsr0[$first][$prefix] = (array) $paths;
+
+            return;
+        }
+        if ($prepend) {
+            $this->prefixesPsr0[$first][$prefix] = array_merge(
+                (array) $paths,
+                $this->prefixesPsr0[$first][$prefix]
+            );
+        } else {
+            $this->prefixesPsr0[$first][$prefix] = array_merge(
+                $this->prefixesPsr0[$first][$prefix],
+                (array) $paths
+            );
+        }
+    }
+
+    /**
+     * Registers a set of PSR-4 directories for a given namespace, either
+     * appending or prepending to the ones previously set for this namespace.
+     *
+     * @param string          $prefix  The prefix/namespace, with trailing '\\'
+     * @param string[]|string $paths   The PSR-4 base directories
+     * @param bool            $prepend Whether to prepend the directories
+     *
+     * @throws \InvalidArgumentException
+     *
+     * @return void
+     */
+    public function addPsr4($prefix, $paths, $prepend = false)
+    {
+        if (!$prefix) {
+            // Register directories for the root namespace.
+            if ($prepend) {
+                $this->fallbackDirsPsr4 = array_merge(
+                    (array) $paths,
+                    $this->fallbackDirsPsr4
+                );
+            } else {
+                $this->fallbackDirsPsr4 = array_merge(
+                    $this->fallbackDirsPsr4,
+                    (array) $paths
+                );
+            }
+        } elseif (!isset($this->prefixDirsPsr4[$prefix])) {
+            // Register directories for a new namespace.
+            $length = strlen($prefix);
+            if ('\\' !== $prefix[$length - 1]) {
+                throw new \InvalidArgumentException("A non-empty PSR-4 prefix must end with a namespace separator.");
+            }
+            $this->prefixLengthsPsr4[$prefix[0]][$prefix] = $length;
+            $this->prefixDirsPsr4[$prefix] = (array) $paths;
+        } elseif ($prepend) {
+            // Prepend directories for an already registered namespace.
+            $this->prefixDirsPsr4[$prefix] = array_merge(
+                (array) $paths,
+                $this->prefixDirsPsr4[$prefix]
+            );
+        } else {
+            // Append directories for an already registered namespace.
+            $this->prefixDirsPsr4[$prefix] = array_merge(
+                $this->prefixDirsPsr4[$prefix],
+                (array) $paths
+            );
+        }
+    }
+
+    /**
+     * Registers a set of PSR-0 directories for a given prefix,
+     * replacing any others previously set for this prefix.
+     *
+     * @param string          $prefix The prefix
+     * @param string[]|string $paths  The PSR-0 base directories
+     *
+     * @return void
+     */
+    public function set($prefix, $paths)
+    {
+        if (!$prefix) {
+            $this->fallbackDirsPsr0 = (array) $paths;
+        } else {
+            $this->prefixesPsr0[$prefix[0]][$prefix] = (array) $paths;
+        }
+    }
+
+    /**
+     * Registers a set of PSR-4 directories for a given namespace,
+     * replacing any others previously set for this namespace.
+     *
+     * @param string          $prefix The prefix/namespace, with trailing '\\'
+     * @param string[]|string $paths  The PSR-4 base directories
+     *
+     * @throws \InvalidArgumentException
+     *
+     * @return void
+     */
+    public function setPsr4($prefix, $paths)
+    {
+        if (!$prefix) {
+            $this->fallbackDirsPsr4 = (array) $paths;
+        } else {
+            $length = strlen($prefix);
+            if ('\\' !== $prefix[$length - 1]) {
+                throw new \InvalidArgumentException("A non-empty PSR-4 prefix must end with a namespace separator.");
+            }
+            $this->prefixLengthsPsr4[$prefix[0]][$prefix] = $length;
+            $this->prefixDirsPsr4[$prefix] = (array) $paths;
+        }
+    }
+
+    /**
+     * Turns on searching the include path for class files.
+     *
+     * @param bool $useIncludePath
+     *
+     * @return void
+     */
+    public function setUseIncludePath($useIncludePath)
+    {
+        $this->useIncludePath = $useIncludePath;
+    }
+
+    /**
+     * Can be used to check if the autoloader uses the include path to check
+     * for classes.
+     *
+     * @return bool
+     */
+    public function getUseIncludePath()
+    {
+        return $this->useIncludePath;
+    }
+
+    /**
+     * Turns off searching the prefix and fallback directories for classes
+     * that have not been registered with the class map.
+     *
+     * @param bool $classMapAuthoritative
+     *
+     * @return void
+     */
+    public function setClassMapAuthoritative($classMapAuthoritative)
+    {
+        $this->classMapAuthoritative = $classMapAuthoritative;
+    }
+
+    /**
+     * Should class lookup fail if not found in the current class map?
+     *
+     * @return bool
+     */
+    public function isClassMapAuthoritative()
+    {
+        return $this->classMapAuthoritative;
+    }
+
+    /**
+     * APCu prefix to use to cache found/not-found classes, if the extension is enabled.
+     *
+     * @param string|null $apcuPrefix
+     *
+     * @return void
+     */
+    public function setApcuPrefix($apcuPrefix)
+    {
+        $this->apcuPrefix = function_exists('apcu_fetch') && filter_var(ini_get('apc.enabled'), FILTER_VALIDATE_BOOLEAN) ? $apcuPrefix : null;
+    }
+
+    /**
+     * The APCu prefix in use, or null if APCu caching is not enabled.
+     *
+     * @return string|null
+     */
+    public function getApcuPrefix()
+    {
+        return $this->apcuPrefix;
+    }
+
+    /**
+     * Registers this instance as an autoloader.
+     *
+     * @param bool $prepend Whether to prepend the autoloader or not
+     *
+     * @return void
+     */
+    public function register($prepend = false)
+    {
+        spl_autoload_register(array($this, 'loadClass'), true, $prepend);
+
+        if (null === $this->vendorDir) {
+            return;
+        }
+
+        if ($prepend) {
+            self::$registeredLoaders = array($this->vendorDir => $this) + self::$registeredLoaders;
+        } else {
+            unset(self::$registeredLoaders[$this->vendorDir]);
+            self::$registeredLoaders[$this->vendorDir] = $this;
+        }
+    }
+
+    /**
+     * Unregisters this instance as an autoloader.
+     *
+     * @return void
+     */
+    public function unregister()
+    {
+        spl_autoload_unregister(array($this, 'loadClass'));
+
+        if (null !== $this->vendorDir) {
+            unset(self::$registeredLoaders[$this->vendorDir]);
+        }
+    }
+
+    /**
+     * Loads the given class or interface.
+     *
+     * @param  string    $class The name of the class
+     * @return true|null True if loaded, null otherwise
+     */
+    public function loadClass($class)
+    {
+        if ($file = $this->findFile($class)) {
+            $includeFile = self::$includeFile;
+            $includeFile($file);
+
+            return true;
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the path to the file where the class is defined.
+     *
+     * @param string $class The name of the class
+     *
+     * @return string|false The path if found, false otherwise
+     */
+    public function findFile($class)
+    {
+        // class map lookup
+        if (isset($this->classMap[$class])) {
+            return $this->classMap[$class];
+        }
+        if ($this->classMapAuthoritative || isset($this->missingClasses[$class])) {
+            return false;
+        }
+        if (null !== $this->apcuPrefix) {
+            $file = apcu_fetch($this->apcuPrefix.$class, $hit);
+            if ($hit) {
+                return $file;
+            }
+        }
+
+        $file = $this->findFileWithExtension($class, '.php');
+
+        // Search for Hack files if we are running on HHVM
+        if (false === $file && defined('HHVM_VERSION')) {
+            $file = $this->findFileWithExtension($class, '.hh');
+        }
+
+        if (null !== $this->apcuPrefix) {
+            apcu_add($this->apcuPrefix.$class, $file);
+        }
+
+        if (false === $file) {
+            // Remember that this class does not exist.
+            $this->missingClasses[$class] = true;
+        }
+
+        return $file;
+    }
+
+    /**
+     * Returns the currently registered loaders indexed by their corresponding vendor directories.
+     *
+     * @return self[]
+     */
+    public static function getRegisteredLoaders()
+    {
+        return self::$registeredLoaders;
+    }
+
+    /**
+     * @param  string       $class
+     * @param  string       $ext
+     * @return string|false
+     */
+    private function findFileWithExtension($class, $ext)
+    {
+        // PSR-4 lookup
+        $logicalPathPsr4 = strtr($class, '\\', DIRECTORY_SEPARATOR) . $ext;
+
+        $first = $class[0];
+        if (isset($this->prefixLengthsPsr4[$first])) {
+            $subPath = $class;
+            while (false !== $lastPos = strrpos($subPath, '\\')) {
+                $subPath = substr($subPath, 0, $lastPos);
+                $search = $subPath . '\\';
+                if (isset($this->prefixDirsPsr4[$search])) {
+                    $pathEnd = DIRECTORY_SEPARATOR . substr($logicalPathPsr4, $lastPos + 1);
+                    foreach ($this->prefixDirsPsr4[$search] as $dir) {
+                        if (file_exists($file = $dir . $pathEnd)) {
+                            return $file;
+                        }
+                    }
+                }
+            }
+        }
+
+        // PSR-4 fallback dirs
+        foreach ($this->fallbackDirsPsr4 as $dir) {
+            if (file_exists($file = $dir . DIRECTORY_SEPARATOR . $logicalPathPsr4)) {
+                return $file;
+            }
+        }
+
+        // PSR-0 lookup
+        if (false !== $pos = strrpos($class, '\\')) {
+            // namespaced class name
+            $logicalPathPsr0 = substr($logicalPathPsr4, 0, $pos + 1)
+                . strtr(substr($logicalPathPsr4, $pos + 1), '_', DIRECTORY_SEPARATOR);
+        } else {
+            // PEAR-like class name
+            $logicalPathPsr0 = strtr($class, '_', DIRECTORY_SEPARATOR) . $ext;
+        }
+
+        if (isset($this->prefixesPsr0[$first])) {
+            foreach ($this->prefixesPsr0[$first] as $prefix => $dirs) {
+                if (0 === strpos($class, $prefix)) {
+                    foreach ($dirs as $dir) {
+                        if (file_exists($file = $dir . DIRECTORY_SEPARATOR . $logicalPathPsr0)) {
+                            return $file;
+                        }
+                    }
+                }
+            }
+        }
+
+        // PSR-0 fallback dirs
+        foreach ($this->fallbackDirsPsr0 as $dir) {
+            if (file_exists($file = $dir . DIRECTORY_SEPARATOR . $logicalPathPsr0)) {
+                return $file;
+            }
+        }
+
+        // PSR-0 include paths.
+        if ($this->useIncludePath && $file = stream_resolve_include_path($logicalPathPsr0)) {
+            return $file;
+        }
+
+        return false;
+    }
+
+    /**
+     * @return void
+     */
+    private static function initializeIncludeClosure()
+    {
+        if (self::$includeFile !== null) {
+            return;
+        }
+
+        /**
+         * Scope isolated include.
+         *
+         * Prevents access to $this/self from included files.
+         *
+         * @param  string $file
+         * @return void
+         */
+        self::$includeFile = \Closure::bind(static function($file) {
+            include $file;
+        }, null, null);
+    }
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\vendor\autoload.php
+========================================
+
+<?php
+
+// autoload.php @generated by Composer
+
+if (PHP_VERSION_ID < 50600) {
+    if (!headers_sent()) {
+        header('HTTP/1.1 500 Internal Server Error');
+    }
+    $err = 'Composer 2.3.0 dropped support for autoloading on PHP <5.6 and you are running '.PHP_VERSION.', please upgrade PHP or use Composer 2.2 LTS via "composer self-update --2.2". Aborting.'.PHP_EOL;
+    if (!ini_get('display_errors')) {
+        if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') {
+            fwrite(STDERR, $err);
+        } elseif (!headers_sent()) {
+            echo $err;
+        }
+    }
+    trigger_error(
+        $err,
+        E_USER_ERROR
+    );
+}
+
+require_once __DIR__ . '/composer/autoload_real.php';
+
+return ComposerAutoloaderInite26b90360657883aaf373c3815abeb05::getLoader();
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\composer.json
+========================================
+
+{
+    "name": "ferrarolaw/ferraro-schema",
+    "description": "Ferraro Structured Data Engine",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "autoload": {
+        "psr-4": {
+            "Ferraro\\Schema\\": "includes/"
+        }
+    },
+    "require": {},
+    "require-dev": {}
+}
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\ferraro-schema.php
+========================================
+
+<?php
+/**
+ * Plugin Name: Ferraro Structured Data Engine
+ * Plugin URI: https://github.com/ferrarolaw/ferraro-schema
+ * Description: Enterprise Structured Data Engine for Ferraro Law.
+ * Version: 0.1.0
+ * Requires at least: 6.8
+ * Requires PHP: 8.1
+ * Author: Ferraro Law
+ * License: GPL-2.0-or-later
+ * Text Domain: ferraro-schema
+ */
+
+declare(strict_types=1);
+
+defined('ABSPATH') || exit;
+
+/*
+|--------------------------------------------------------------------------
+| Plugin Constants
+|--------------------------------------------------------------------------
+*/
+
+define('FSDE_VERSION', '0.1.0');
+define('FSDE_PLUGIN_FILE', __FILE__);
+define('FSDE_PLUGIN_PATH', plugin_dir_path(__FILE__));
+define('FSDE_PLUGIN_URL', plugin_dir_url(__FILE__));
+
+/*
+|--------------------------------------------------------------------------
+| Composer Autoloader
+|--------------------------------------------------------------------------
+*/
+
+$autoload = FSDE_PLUGIN_PATH . 'vendor/autoload.php';
+
+if (file_exists($autoload)) {
+    require_once $autoload;
+} else {
+    add_action('admin_notices', static function (): void {
+        echo '<div class="notice notice-error"><p>';
+        echo esc_html__('Ferraro Structured Data Engine requires Composer dependencies. Please run "composer install".', 'ferraro-schema');
+        echo '</p></div>';
+    });
+
+    return;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Bootstrap Plugin
+|--------------------------------------------------------------------------
+*/
+
+Ferraro\Schema\Core\Plugin::boot();
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\phpcs.xml
+========================================
+
+
+========================================
+FILE: E:\Ferraro-new-site\plugins updated\ferraro-schema\uninstall.php
+========================================
+
