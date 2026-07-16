@@ -50,15 +50,20 @@ final class AttorneyBuilder implements BuilderInterface
         }
 
         // 1. Core Meta Mapping
-        $canonicalUrl = get_permalink($postId);
-        $entityId = $this->registry->getEntityId('team', $post->post_name, 'person');
+        // FIX: Grab the true permalink (e.g., /attorney-profiles/james-l-ferraro/)
+        $canonicalUrl = rtrim(get_permalink($postId), '/');
+        
+        // FIX: Build the Person ID dynamically using the true URL
+        $entityId = $canonicalUrl . '/#person';
+        
         $name = get_the_title($postId);
         $jobTitle = get_field('position', $postId) ?: null; // ACF Field "position" 
         $introText = get_field('intro', $postId); // ACF Field "intro" 
         $description = $this->parser->toPlainText($introText);
 
         // 2. Base Assets
-        $imageEntity = $this->buildImageEntity($postId, $post->post_name);
+        // FIX: Pass the canonical URL to the image builder so it shares the correct base path
+        $imageEntity = $this->buildImageEntity($postId, $canonicalUrl);
         $organization = $this->buildOrganizationEntity();
 
         // 3. Simple WYSIWYG List Parsers
@@ -74,7 +79,7 @@ final class AttorneyBuilder implements BuilderInterface
         $barAdmissionsHtml = get_field('bar_admissions', $postId) ?: get_field('bar admissions', $postId); // ACF Tab "Bar Admissions"
         $barAdmissions = $this->parser->extractListItems($barAdmissionsHtml);
 
-        // 4. Resolve Relationship Connections (Sprint 5) 
+        // 4. Resolve Relationship Connections
         $practiceAreas = $this->buildPracticeAreas($postId);
         $relatedArticles = $this->buildRelatedArticles($postId);
         $pressReleases = $this->buildPressReleases($postId);
@@ -116,11 +121,13 @@ final class AttorneyBuilder implements BuilderInterface
         $entities = [];
 
         foreach ($posts as $post) {
-            $id = $this->registry->getEntityId('practice-areas', $post->post_name, 'service');
+            $permalink = get_permalink($post->ID);
+            $id = rtrim($permalink, '/') . '/#service';
+
             $entities[] = new PracticeAreaEntity(
                 id: $id,
                 name: $post->post_title,
-                url: get_permalink($post->ID),
+                url: $permalink,
                 description: $post->post_excerpt ?: null,
                 provider: $this->buildOrganizationEntity()
             );
@@ -142,12 +149,14 @@ final class AttorneyBuilder implements BuilderInterface
         $entities = [];
 
         foreach ($posts as $post) {
-            $id = $this->registry->getEntityId('post', $post->post_name, 'article');
+            $permalink = get_permalink($post->ID);
+            $id = rtrim($permalink, '/') . '/#article';
+
             $entities[] = new ArticleEntity(
                 id: $id,
                 type: 'BlogPosting',
                 headline: $post->post_title,
-                url: get_permalink($post->ID),
+                url: $permalink,
                 datePublished: get_the_date('c', $post->ID) ?: null
             );
         }
@@ -167,13 +176,18 @@ final class AttorneyBuilder implements BuilderInterface
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
 
+        // FIX: Base URL for where all press releases live
+        $archiveUrl = rtrim(home_url('/press-media/'), '/');
+
         foreach ($posts as $post) {
-            $id = $this->registry->getEntityId('press-and-media', $post->post_name, 'newsarticle');
+            // FIX: Point ID to the collective page with a unique slug hash
+            $id = $archiveUrl . '/#' . $post->post_name;
+
             $entities[] = new ArticleEntity(
                 id: $id,
                 type: 'NewsArticle',
                 headline: $post->post_title,
-                url: get_permalink($post->ID),
+                url: $archiveUrl, // Keep URL as the collective page they can actually visit
                 datePublished: get_the_date('c', $post->ID) ?: null
             );
         }
@@ -193,8 +207,12 @@ final class AttorneyBuilder implements BuilderInterface
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
 
+        // FIX: Base URL for where all testimonials live
+        $archiveUrl = rtrim(home_url('/testimonials/'), '/');
+
         foreach ($posts as $post) {
-            $id = $this->registry->getEntityId('testimonials', $post->post_name, 'review');
+            // FIX: Point ID to the collective page with a unique slug hash
+            $id = $archiveUrl . '/#' . $post->post_name;
             $body = get_field('testimonial', $post->ID) ?: $post->post_content;
             
             $entities[] = new ReviewEntity(
@@ -221,7 +239,8 @@ final class AttorneyBuilder implements BuilderInterface
         $entities = [];
 
         foreach ($posts as $post) {
-            $id = $this->registry->getEntityId('verdicts', $post->post_name, 'verdict');
+            $permalink = get_permalink($post->ID);
+            $id = rtrim($permalink, '/') . '/#verdict';
             $amount = get_field('verdict_amount', $post->ID) ?: null;
             $description = get_field('verdict_description', $post->ID) ?: $post->post_excerpt;
 
@@ -240,10 +259,10 @@ final class AttorneyBuilder implements BuilderInterface
      * Builds standard ImageEntity from raw/array values of ACF thumbnail.
      *
      * @param int $postId
-     * @param string $slug
+     * @param string $canonicalUrl The base canonical URL of the parent post
      * @return ImageEntity|null
      */
-    private function buildImageEntity(int $postId, string $slug): ?ImageEntity
+    private function buildImageEntity(int $postId, string $canonicalUrl): ?ImageEntity
     {
         $imageField = get_field('thumbnail_image', $postId); // ACF field "thumbnail_image" 
         if (empty($imageField)) {
@@ -274,7 +293,8 @@ final class AttorneyBuilder implements BuilderInterface
             return null;
         }
 
-        $imageId = $this->registry->getEntityId('team', $slug, 'image');
+        // FIX: Use the true canonical URL base for the image ID
+        $imageId = rtrim($canonicalUrl, '/') . '/#image';
 
         return new ImageEntity(
             id: $imageId,

@@ -48,7 +48,6 @@ final class PersonEntity extends Entity
         private readonly array $testimonials = [],
         private readonly array $verdicts = []
     ) {
-        // CHANGE THIS LINE: Change 'Attorney' to 'Person'
         parent::__construct($id, 'Person'); 
     }
 
@@ -57,6 +56,16 @@ final class PersonEntity extends Entity
      */
     public function toArray(): array
     {
+        // 1. Serialize the worksFor (Organization) Entity first
+        $worksForData = $this->serializeValue($this->worksFor);
+
+        // 2. Nest testimonials inside the worksFor array
+        // This satisfies Schema.org standards because an Organization/LocalBusiness 
+        // is allowed to have reviews, whereas a Person is not.
+        if (is_array($worksForData) && !empty($this->testimonials)) {
+            $worksForData['review'] = $this->serializeValue($this->testimonials);
+        }
+
         return [
             '@type' => $this->getType(),
             '@id' => $this->getId(),
@@ -73,7 +82,7 @@ final class PersonEntity extends Entity
             )),
             'knowsLanguage' => $this->knowsLanguage,
             'honorificSuffix' => $this->honorificSuffix,
-            'worksFor' => $this->serializeValue($this->worksFor),
+            'worksFor' => $worksForData, // Outputs the enriched worksFor with nested reviews
             'hasOfferCatalog' => !empty($this->practiceAreas) ? [
                 '@type' => 'OfferCatalog',
                 'name' => 'Practice Areas',
@@ -83,7 +92,6 @@ final class PersonEntity extends Entity
                 $this->serializeValue($this->relatedArticles),
                 $this->serializeValue($this->pressReleases)
             ),
-            'review' => $this->serializeValue($this->testimonials),
             'publishingPrinciples' => $this->serializeValue($this->verdicts), // Mapping Case Verdicts as structured principles
         ];
     }
