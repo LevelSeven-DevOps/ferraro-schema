@@ -10,6 +10,7 @@ use Ferraro\Schema\Entities\ArticleEntity;
 use Ferraro\Schema\Entities\ImageEntity;
 use Ferraro\Schema\Entities\OrganizationEntity;
 use Ferraro\Schema\Entities\PersonEntity;
+use Ferraro\Schema\Entities\PostalAddressEntity;
 use Ferraro\Schema\Entities\PracticeAreaEntity;
 use Ferraro\Schema\Entities\ReviewEntity;
 use Ferraro\Schema\Entities\VerdictEntity;
@@ -61,16 +62,16 @@ final class AttorneyBuilder implements BuilderInterface
         $organization = $this->buildOrganizationEntity();
 
         // 3. Simple WYSIWYG List Parsers
-        $educationHtml = get_field('education', $postId); // ACF Tab "Education" [cite: 264]
+        $educationHtml = get_field('education', $postId); // ACF Tab "Education"
         $alumniOf = $this->parser->extractListItems($educationHtml);
 
-        $awardsHtml = get_field('awards', $postId); // ACF Tab "Awards" [cite: 306]
+        $awardsHtml = get_field('awards', $postId); // ACF Tab "Awards"
         $awards = $this->parser->extractListItems($awardsHtml);
 
-        $languagesHtml = get_field('foreign_language_content', $postId); // ACF Tab "Foreign Languages" [cite: 314]
+        $languagesHtml = get_field('foreign_language_content', $postId); // ACF Tab "Foreign Languages"
         $languages = $this->parser->extractListItems($languagesHtml);
 
-        $barAdmissionsHtml = get_field('bar_admissions', $postId) ?: get_field('bar admissions', $postId); // ACF Tab "Bar Admissions" [cite: 264]
+        $barAdmissionsHtml = get_field('bar_admissions', $postId) ?: get_field('bar admissions', $postId); // ACF Tab "Bar Admissions"
         $barAdmissions = $this->parser->extractListItems($barAdmissionsHtml);
 
         // 4. Resolve Relationship Connections (Sprint 5) 
@@ -285,16 +286,30 @@ final class AttorneyBuilder implements BuilderInterface
     }
 
     /**
-     * Helper to return consistent parent Firm Organization.
+     * Helper to return consistent parent Firm Organization / Local Business.
      *
      * @return OrganizationEntity
      */
     private function buildOrganizationEntity(): OrganizationEntity
     {
+        // Define the structured firm physical address
+        $address = new PostalAddressEntity(
+            id: 'https://stg-ferraronewsite-stage.kinsta.cloud/#postaladdress',
+            streetAddress: '600 Brickell Ave Unit 3800',
+            postalCode: '33131',
+            addressLocality: 'Miami',
+            addressRegion: 'Florida',
+            addressCountry: 'US'
+        );
+
         return new OrganizationEntity(
             id: $this->registry->getOrganizationId(),
             name: get_bloginfo('name'),
-            url: home_url('/')
+            url: home_url('/'),
+            logo: null,
+            sameAs: [],
+            address: $address,
+            openingHours: 'Mo-Su 00:00-24:00' // SET TO ALWAYS OPEN (24/7)
         );
     }
 }

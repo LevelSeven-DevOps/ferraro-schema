@@ -48,7 +48,8 @@ final class PersonEntity extends Entity
         private readonly array $testimonials = [],
         private readonly array $verdicts = []
     ) {
-        parent::__construct($id, 'Attorney');
+        // CHANGE THIS LINE: Change 'Attorney' to 'Person'
+        parent::__construct($id, 'Person'); 
     }
 
     /**
