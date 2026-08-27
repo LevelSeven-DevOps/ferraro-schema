@@ -6,15 +6,15 @@ namespace Ferraro\Schema\Entities;
 
 /**
  * Class VerdictEntity
- * * Represents case results, verdicts, and settlements mapped as a specialized Schema.org 'Thing' context.
+ * * Represents a Case Verdict, mapped as a CreativeWork for schema compliance.
  */
 final class VerdictEntity extends Entity
 {
     /**
      * @param string $id
-     * @param string $title Case name or summary (e.g. "$10M Mesothelioma Verdict")
-     * @param string|null $description Case narrative
-     * @param string|null $amount Amount recovered (to map custom structured telemetry)
+     * @param string $title
+     * @param string|null $description
+     * @param string|null $amount
      */
     public function __construct(
         string $id,
@@ -22,7 +22,8 @@ final class VerdictEntity extends Entity
         private readonly ?string $description = null,
         private readonly ?string $amount = null
     ) {
-        parent::__construct($id, 'Thing');
+        // FIX: Changed from 'Thing' to 'CreativeWork' to satisfy publishingPrinciples target type
+        parent::__construct($id, 'CreativeWork'); 
     }
 
     /**
@@ -30,12 +31,14 @@ final class VerdictEntity extends Entity
      */
     public function toArray(): array
     {
-        return [
+        return array_filter([
             '@type' => $this->getType(),
             '@id' => $this->getId(),
-            'name' => $this->title,
+            // Outputting the amount and title clearly for the search engine
+            'name' => $this->amount ? $this->amount . ' - ' . $this->title : $this->title,
+            'headline' => $this->title,
             'description' => $this->description,
-            'value' => $this->amount, // Custom key representation optimized for internal search feeds
-        ];
+            'abstract' => $this->amount ? "Verdict Amount: {$this->amount}" : null,
+        ]);
     }
 }

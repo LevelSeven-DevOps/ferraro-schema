@@ -14,6 +14,8 @@ use Ferraro\Schema\Entities\PostalAddressEntity;
 use Ferraro\Schema\Entities\PracticeAreaEntity;
 use Ferraro\Schema\Entities\ReviewEntity;
 use Ferraro\Schema\Entities\VerdictEntity;
+use Ferraro\Schema\Entities\WebPageEntity;
+use Ferraro\Schema\Entities\OfferCatalogEntity;
 use Ferraro\Schema\Graph\EntityRegistry;
 use Ferraro\Schema\Parser\HtmlParser;
 use Ferraro\Schema\Parser\RelationshipParser;
@@ -31,92 +33,129 @@ final class AttorneyBuilder implements BuilderInterface
     ) {
     }
 
-    /**
-     * @inheritDoc
-     */
     public function supports(int $postId): bool
     {
         return get_post_type($postId) === 'team';
     }
 
-    /**
-     * @inheritDoc
-     */
-    public function build(int $postId): ?EntityInterface
+    public function build(int $postId): array|EntityInterface|null
     {
         $post = get_post($postId);
         if (!$post) {
             return null;
         }
 
-        // 1. Core Meta Mapping
-        // FIX: Grab the true permalink (e.g., /attorney-profiles/james-l-ferraro/)
+        $entities = [];
+
+        // 1. Core ID Generation based on canonical Production URLs
         $canonicalUrl = rtrim(get_permalink($postId), '/');
+        $personId = $canonicalUrl . '/#person';
+        $webPageId = $canonicalUrl . '/#webpage';
+        $imageId = $canonicalUrl . '/#image';
         
-        // FIX: Build the Person ID dynamically using the true URL
-        $entityId = $canonicalUrl . '/#person';
+        $orgId = $this->registry->getOrganizationId();
+        $addressId = $orgId . 'postaladdress';
+        $offerCatalogId = $orgId . 'offer-catalog';
+
+        // 2. WebPage Node
+        $entities[] = new WebPageEntity(
+            id: $webPageId,
+            url: $canonicalUrl,
+            name: trim(get_the_title($postId)) . ' | ' . get_bloginfo('name'),
+            mainEntityId: $personId
+        );
+
+        // 3. PostalAddress Node
+        $entities[] = new PostalAddressEntity(
+            id: $addressId,
+            streetAddress: '600 Brickell Ave Unit 3800',
+            postalCode: '33131',
+            addressLocality: 'Miami',
+            addressRegion: 'FL',
+            addressCountry: 'US'
+        );
+
+        // 4. Resolve Relationship Arrays
+        $reviews = $this->buildTestimonials($postId, $orgId);
+        $reviewIds = array_map(fn($r) => $r->getId(), $reviews);
         
-        $name = get_the_title($postId);
-        $jobTitle = get_field('position', $postId) ?: null; // ACF Field "position" 
-        $introText = get_field('intro', $postId); // ACF Field "intro" 
-        $description = $this->parser->toPlainText($introText);
-
-        // 2. Base Assets
-        // FIX: Pass the canonical URL to the image builder so it shares the correct base path
-        $imageEntity = $this->buildImageEntity($postId, $canonicalUrl);
-        $organization = $this->buildOrganizationEntity();
-
-        // 3. Simple WYSIWYG List Parsers
-        $educationHtml = get_field('education', $postId); // ACF Tab "Education"
-        $alumniOf = $this->parser->extractListItems($educationHtml);
-
-        $awardsHtml = get_field('awards', $postId); // ACF Tab "Awards"
-        $awards = $this->parser->extractListItems($awardsHtml);
-
-        $languagesHtml = get_field('foreign_language_content', $postId); // ACF Tab "Foreign Languages"
-        $languages = $this->parser->extractListItems($languagesHtml);
-
-        $barAdmissionsHtml = get_field('bar_admissions', $postId) ?: get_field('bar admissions', $postId); // ACF Tab "Bar Admissions"
-        $barAdmissions = $this->parser->extractListItems($barAdmissionsHtml);
-
-        // 4. Resolve Relationship Connections
-        $practiceAreas = $this->buildPracticeAreas($postId);
+        $practiceAreas = $this->buildPracticeAreas($postId, $orgId);
+        $serviceIds = array_map(fn($s) => $s->getId(), $practiceAreas);
+        
         $relatedArticles = $this->buildRelatedArticles($postId);
         $pressReleases = $this->buildPressReleases($postId);
-        $testimonials = $this->buildTestimonials($postId);
         $verdicts = $this->buildVerdicts($postId);
 
-        // 5. Build Entity Graph Object
-        return new PersonEntity(
-            id: $entityId,
-            name: $name,
-            jobTitle: $jobTitle,
-            description: $description,
-            image: $imageEntity,
-            url: $canonicalUrl,
-            alumniOf: $alumniOf,
-            awards: $awards,
-            knowsAbout: [],
-            knowsLanguage: $languages,
-            honorificSuffix: $barAdmissions,
-            worksFor: $organization,
-            practiceAreas: $practiceAreas,
-            relatedArticles: $relatedArticles,
-            pressReleases: $pressReleases,
-            testimonials: $testimonials,
-            verdicts: $verdicts
+        // 5. Organization Node
+        $entities[] = new OrganizationEntity(
+            id: $orgId,
+            name: 'Ferraro Law Firm',
+            url: home_url('/'),
+            addressId: $addressId,
+            openingHours: null, // Omitted unless actual verified hours are known
+            offerCatalogId: empty($serviceIds) ? null : $offerCatalogId,
+            reviewIds: $reviewIds
         );
+
+        // 6. Push relationship nodes to graph array
+        foreach ($reviews as $review) $entities[] = $review;
+        foreach ($relatedArticles as $article) $entities[] = $article;
+        foreach ($pressReleases as $press) $entities[] = $press;
+        foreach ($verdicts as $verdict) $entities[] = $verdict;
+
+        // 7. Offer Catalog Node
+        if (!empty($serviceIds)) {
+            $entities[] = new OfferCatalogEntity(
+                id: $offerCatalogId,
+                name: 'Practice Areas',
+                serviceIds: $serviceIds
+            );
+            foreach ($practiceAreas as $pa) $entities[] = $pa;
+        }
+
+        // 8. Image Node
+        $imageEntity = $this->buildImageEntity($postId, $imageId);
+        if ($imageEntity) {
+            $entities[] = $imageEntity;
+        }
+
+        // 9. Process/Clean Text & Education
+        $rawEducation = get_field('education', $postId);
+        $alumniOfRaw = $this->parser->extractListItems($rawEducation);
+        $alumniOfClean = [];
+        
+        foreach ($alumniOfRaw as $eduStr) {
+            $school = $this->extractSchoolName($eduStr);
+            if ($school) {
+                $alumniOfClean[] = $school;
+            }
+        }
+
+        // KnowsAbout mapping directly from Practice Area names
+        $knowsAbout = array_map(fn($s) => $s->toArray()['name'], $practiceAreas);
+
+        // 10. Core Person Node
+        $entities[] = new PersonEntity(
+            id: $personId,
+            name: trim(get_the_title($postId)),
+            jobTitle: trim(get_field('position', $postId) ?: ''),
+            description: trim($this->parser->toPlainText(get_field('intro', $postId)) ?: ''),
+            imageId: $imageEntity ? $imageId : null,
+            url: $canonicalUrl,
+            alumniOf: array_unique($alumniOfClean),
+            awards: $this->parser->extractListItems(get_field('awards', $postId)),
+            knowsAbout: $knowsAbout,
+            knowsLanguage: $this->parser->extractListItems(get_field('foreign_language_content', $postId)),
+            honorificSuffix: $this->parser->extractListItems(get_field('bar_admissions', $postId)),
+            worksForId: $orgId
+        );
+
+        return $entities;
     }
 
-    /**
-     * Resolves the "practice_areas" Relationship field into PracticeArea Entities. 
-     *
-     * @param int $postId
-     * @return array<PracticeAreaEntity>
-     */
-    private function buildPracticeAreas(int $postId): array
+    private function buildPracticeAreas(int $postId, string $orgId): array
     {
-        $raw = get_field('practice_areas', $postId); // ACF field "practice_areas" 
+        $raw = get_field('practice_areas', $postId); 
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
 
@@ -126,115 +165,81 @@ final class AttorneyBuilder implements BuilderInterface
 
             $entities[] = new PracticeAreaEntity(
                 id: $id,
-                name: $post->post_title,
+                name: trim($post->post_title),
                 url: $permalink,
-                description: $post->post_excerpt ?: null,
-                provider: $this->buildOrganizationEntity()
+                description: trim($post->post_excerpt ?: ''),
+                providerId: $orgId
             );
         }
 
         return $entities;
     }
 
-    /**
-     * Resolves the "related_posts" Relationship field into Article Entities. 
-     *
-     * @param int $postId
-     * @return array<ArticleEntity>
-     */
     private function buildRelatedArticles(int $postId): array
     {
-        $raw = get_field('related_posts', $postId); // ACF field "related_posts" 
+        $raw = get_field('related_posts', $postId);
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
 
         foreach ($posts as $post) {
             $permalink = get_permalink($post->ID);
             $id = rtrim($permalink, '/') . '/#article';
-
             $entities[] = new ArticleEntity(
                 id: $id,
                 type: 'BlogPosting',
-                headline: $post->post_title,
+                headline: trim($post->post_title),
                 url: $permalink,
                 datePublished: get_the_date('c', $post->ID) ?: null
             );
         }
-
         return $entities;
     }
 
-    /**
-     * Resolves the "related_press_media" Relationship field into Article Entities. 
-     *
-     * @param int $postId
-     * @return array<ArticleEntity>
-     */
     private function buildPressReleases(int $postId): array
     {
-        $raw = get_field('related_press_media', $postId); // ACF field "related_press_media" 
+        $raw = get_field('related_press_media', $postId);
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
-
-        // FIX: Base URL for where all press releases live
         $archiveUrl = rtrim(home_url('/press-media/'), '/');
 
         foreach ($posts as $post) {
-            // FIX: Point ID to the collective page with a unique slug hash
             $id = $archiveUrl . '/#' . $post->post_name;
-
             $entities[] = new ArticleEntity(
                 id: $id,
                 type: 'NewsArticle',
-                headline: $post->post_title,
-                url: $archiveUrl, // Keep URL as the collective page they can actually visit
+                headline: trim($post->post_title),
+                url: $archiveUrl,
                 datePublished: get_the_date('c', $post->ID) ?: null
             );
         }
-
         return $entities;
     }
 
-    /**
-     * Resolves the "testimonials" Relationship field into Review Entities. 
-     *
-     * @param int $postId
-     * @return array<ReviewEntity>
-     */
-    private function buildTestimonials(int $postId): array
+    private function buildTestimonials(int $postId, string $orgId): array
     {
-        $raw = get_field('testimonials', $postId); // ACF field "testimonials" 
+        $raw = get_field('testimonials', $postId); 
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
-
-        // FIX: Base URL for where all testimonials live
         $archiveUrl = rtrim(home_url('/testimonials/'), '/');
 
         foreach ($posts as $post) {
-            // FIX: Point ID to the collective page with a unique slug hash
             $id = $archiveUrl . '/#' . $post->post_name;
             $body = get_field('testimonial', $post->ID) ?: $post->post_content;
             
             $entities[] = new ReviewEntity(
                 id: $id,
-                authorName: $post->post_title,
-                reviewBody: $this->parser->toPlainText($body) ?: '',
-                itemReviewed: $this->buildOrganizationEntity()
+                authorName: trim($post->post_title),
+                reviewBody: trim($this->parser->toPlainText($body) ?: ''),
+                ratingValue: 5.0,
+                itemReviewedId: $orgId
             );
         }
-
         return $entities;
     }
 
-    /**
-     * Resolves the "related_verdicts" Relationship field into Verdict Entities. 
-     *
-     * @param int $postId
-     * @return array<VerdictEntity>
-     */
     private function buildVerdicts(int $postId): array
     {
-        $raw = get_field('related_verdicts', $postId); // ACF field "related_verdicts" 
+        $raw = get_field('related_verdicts', $postId);
         $posts = $this->relationParser->parseRelationships($raw);
         $entities = [];
 
@@ -246,28 +251,18 @@ final class AttorneyBuilder implements BuilderInterface
 
             $entities[] = new VerdictEntity(
                 id: $id,
-                title: $post->post_title,
-                description: $this->parser->toPlainText($description),
+                title: trim($post->post_title),
+                description: trim($this->parser->toPlainText($description) ?: ''),
                 amount: $amount
             );
         }
-
         return $entities;
     }
 
-    /**
-     * Builds standard ImageEntity from raw/array values of ACF thumbnail.
-     *
-     * @param int $postId
-     * @param string $canonicalUrl The base canonical URL of the parent post
-     * @return ImageEntity|null
-     */
-    private function buildImageEntity(int $postId, string $canonicalUrl): ?ImageEntity
+    private function buildImageEntity(int $postId, string $imageId): ?ImageEntity
     {
-        $imageField = get_field('thumbnail_image', $postId); // ACF field "thumbnail_image" 
-        if (empty($imageField)) {
-            return null;
-        }
+        $imageField = get_field('thumbnail_image', $postId); 
+        if (empty($imageField)) return null;
 
         $imageUrl = '';
         $width = null;
@@ -289,12 +284,9 @@ final class AttorneyBuilder implements BuilderInterface
             $imageUrl = $imageField;
         }
 
-        if (empty($imageUrl)) {
+        if (empty($imageUrl) || str_contains(strtolower($imageUrl), 'bio-no-image')) {
             return null;
         }
-
-        // FIX: Use the true canonical URL base for the image ID
-        $imageId = rtrim($canonicalUrl, '/') . '/#image';
 
         return new ImageEntity(
             id: $imageId,
@@ -306,30 +298,23 @@ final class AttorneyBuilder implements BuilderInterface
     }
 
     /**
-     * Helper to return consistent parent Firm Organization / Local Business.
-     *
-     * @return OrganizationEntity
+     * Parses complex education strings to locate just the primary school/university.
      */
-    private function buildOrganizationEntity(): OrganizationEntity
+    private function extractSchoolName(string $educationString): ?string
     {
-        // Define the structured firm physical address
-        $address = new PostalAddressEntity(
-            id: 'https://stg-ferraronewsite-stage.kinsta.cloud/#postaladdress',
-            streetAddress: '600 Brickell Ave Unit 3800',
-            postalCode: '33131',
-            addressLocality: 'Miami',
-            addressRegion: 'Florida',
-            addressCountry: 'US'
-        );
-
-        return new OrganizationEntity(
-            id: $this->registry->getOrganizationId(),
-            name: get_bloginfo('name'),
-            url: home_url('/'),
-            logo: null,
-            sameAs: [],
-            address: $address,
-            openingHours: 'Mo-Su 00:00-24:00' // SET TO ALWAYS OPEN (24/7)
-        );
+        $string = trim($educationString);
+        if (empty($string)) return null;
+        
+        // Exclude standalone strings that are purely concentrations 
+        if (stripos($string, 'concentration') === 0) return null;
+        
+        $parts = explode(',', $string);
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if (preg_match('/(University|College|School|Institute|Academy|Law Center)/i', $part)) {
+                return $part;
+            }
+        }
+        return $string; // Safe fallback
     }
 }

@@ -10,30 +10,20 @@ namespace Ferraro\Schema\Entities;
  */
 final class ArticleEntity extends Entity
 {
-    /**
-     * @param string $id
-     * @param string $type Schema.org type (e.g. 'BlogPosting', 'NewsArticle')
-     * @param string $headline
-     * @param string $url
-     * @param string|null $datePublished
-     * @param ImageEntity|null $image
-     * @param PersonEntity|OrganizationEntity|null $author
-     */
     public function __construct(
         string $id,
         string $type,
         private readonly string $headline,
         private readonly string $url,
         private readonly ?string $datePublished = null,
-        private readonly ?ImageEntity $image = null,
-        private readonly PersonEntity|OrganizationEntity|null $author = null
+        private readonly ?string $dateModified = null,
+        private readonly ?string $authorId = null,
+        private readonly ?string $publisherId = null,
+        private readonly ?ImageEntity $image = null
     ) {
         parent::__construct($id, $type);
     }
 
-    /**
-     * @inheritDoc
-     */
     public function toArray(): array
     {
         return [
@@ -42,8 +32,10 @@ final class ArticleEntity extends Entity
             'headline' => $this->headline,
             'url' => $this->url,
             'datePublished' => $this->datePublished,
+            'dateModified' => $this->dateModified,
+            'author' => $this->authorId ? ['@id' => $this->authorId] : null,
+            'publisher' => $this->publisherId ? ['@id' => $this->publisherId] : null,
             'image' => $this->serializeValue($this->image),
-            'author' => $this->serializeValue($this->author),
         ];
     }
 }

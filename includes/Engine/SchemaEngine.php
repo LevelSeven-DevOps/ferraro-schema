@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ferraro\Schema\Engine;
 
 use Ferraro\Schema\Contracts\BuilderInterface;
+use Ferraro\Schema\Contracts\EntityInterface;
 use Ferraro\Schema\Graph\Graph;
 use Ferraro\Schema\Support\Cache;
 use Ferraro\Schema\Support\Validator;
@@ -65,9 +66,18 @@ final class SchemaEngine
 
         foreach ($this->builders as $builder) {
             if ($builder->supports($postId)) {
-                $entity = $builder->build($postId);
-                if ($entity !== null) {
-                    $graph->add($entity);
+                $result = $builder->build($postId);
+                
+                if ($result !== null) {
+                    if (is_array($result)) {
+                        foreach ($result as $entity) {
+                            if ($entity instanceof EntityInterface) {
+                                $graph->add($entity);
+                            }
+                        }
+                    } elseif ($result instanceof EntityInterface) {
+                        $graph->add($result);
+                    }
                     $processed = true;
                 }
             }

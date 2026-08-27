@@ -10,33 +10,20 @@ namespace Ferraro\Schema\Entities;
  */
 final class OrganizationEntity extends Entity
 {
-    /**
-     * @param string $id
-     * @param string $name
-     * @param string $url
-     * @param ImageEntity|string|null $logo
-     * @param array<string> $sameAs Social media connections and directories.
-     * @param PostalAddressEntity|null $address Physical address of the organization.
-     * @param string|null $openingHours Business operating hours.
-     */
     public function __construct(
         string $id,
         private readonly string $name,
         private readonly string $url,
-        private readonly ImageEntity|string|null $logo = null,
+        private readonly ?string $logoId = null,
         private readonly array $sameAs = [],
-        private readonly ?PostalAddressEntity $address = null,
-        private readonly ?string $openingHours = null // ADDED THIS PARAMETER
+        private readonly ?string $addressId = null,
+        private readonly ?string $openingHours = null,
+        private readonly ?string $offerCatalogId = null,
+        private readonly array $reviewIds = []
     ) {
-        // Since we are adding physical/local business traits (address & opening hours),
-        // we map this to the LegalService type (which extends LocalBusiness & Organization)
-        // for optimal local SEO.
         parent::__construct($id, 'LegalService');
     }
 
-    /**
-     * @inheritDoc
-     */
     public function toArray(): array
     {
         return [
@@ -44,10 +31,12 @@ final class OrganizationEntity extends Entity
             '@id' => $this->getId(),
             'name' => $this->name,
             'url' => $this->url,
-            'logo' => $this->serializeValue($this->logo),
+            'logo' => $this->logoId ? ['@id' => $this->logoId] : null,
             'sameAs' => $this->sameAs,
-            'address' => $this->serializeValue($this->address),
-            'openingHours' => $this->openingHours, // ADDED THIS PROPERTY
+            'address' => $this->addressId ? ['@id' => $this->addressId] : null,
+            'openingHours' => $this->openingHours,
+            'hasOfferCatalog' => $this->offerCatalogId ? ['@id' => $this->offerCatalogId] : null,
+            'review' => !empty($this->reviewIds) ? array_map(fn($rId) => ['@id' => $rId], $this->reviewIds) : null,
         ];
     }
 }

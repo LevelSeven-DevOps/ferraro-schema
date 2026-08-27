@@ -12,14 +12,14 @@ final class HtmlParser
 {
     /**
      * Extracts bullet points/list items from a WYSIWYG HTML string.
-     * Falls back to paragraph exploding if no HTML list structure is found.
+     * Safe against non-string parameters (e.g., boolean false returned by empty ACF fields).
      *
-     * @param string|null $html
+     * @param mixed $html
      * @return array<string>
      */
-    public function extractListItems(?string $html): array
+    public function extractListItems(mixed $html): array
     {
-        if (empty($html)) {
+        if (empty($html) || !is_string($html)) {
             return [];
         }
 
@@ -71,13 +71,14 @@ final class HtmlParser
 
     /**
      * Cleans a raw WYSIWYG block to a plain text string suitable for description fields.
+     * Safe against non-string parameters (e.g., boolean false returned by empty ACF fields).
      *
-     * @param string|null $html
+     * @param mixed $html
      * @return string|null
      */
-    public function toPlainText(?string $html): ?string
+    public function toPlainText(mixed $html): ?string
     {
-        if (empty($html)) {
+        if (empty($html) || !is_string($html)) {
             return null;
         }
 

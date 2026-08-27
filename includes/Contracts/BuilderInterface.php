@@ -19,10 +19,10 @@ interface BuilderInterface
     public function supports(int $postId): bool;
 
     /**
-     * Read data from WordPress and ACF for a post and construct its schema Entity representation.
+     * Read data from WordPress and ACF for a post and construct its schema Entity representation(s).
      *
      * @param int $postId
-     * @return EntityInterface|null
+     * @return array<EntityInterface>|EntityInterface|null
      */
-    public function build(int $postId): ?EntityInterface;
+    public function build(int $postId): array|EntityInterface|null;
 }

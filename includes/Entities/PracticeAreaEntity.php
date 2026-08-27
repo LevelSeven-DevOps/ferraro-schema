@@ -10,26 +10,16 @@ namespace Ferraro\Schema\Entities;
  */
 final class PracticeAreaEntity extends Entity
 {
-    /**
-     * @param string $id
-     * @param string $name
-     * @param string $url
-     * @param string|null $description
-     * @param OrganizationEntity|null $provider The law firm providing the service.
-     */
     public function __construct(
         string $id,
         private readonly string $name,
         private readonly string $url,
         private readonly ?string $description = null,
-        private readonly ?OrganizationEntity $provider = null
+        private readonly ?string $providerId = null
     ) {
         parent::__construct($id, 'Service');
     }
 
-    /**
-     * @inheritDoc
-     */
     public function toArray(): array
     {
         return [
@@ -38,7 +28,7 @@ final class PracticeAreaEntity extends Entity
             'name' => $this->name,
             'url' => $this->url,
             'description' => $this->description,
-            'provider' => $this->serializeValue($this->provider),
+            'provider' => $this->providerId ? ['@id' => $this->providerId] : null,
         ];
     }
 }

@@ -12,6 +12,7 @@ final class Validator
 {
     /**
      * Clean schema arrays by recursively removing null values, empty strings, and empty arrays.
+     * Re-indexes numeric arrays to ensure correct JSON array rendering.
      *
      * @param array<string, mixed> $data
      * @return array<string, mixed>
@@ -36,6 +37,13 @@ final class Validator
 
             if ($this->isEmpty($value)) {
                 unset($array[$key]);
+            }
+        }
+
+        // Re-index numerical arrays so json_encode outputs [] instead of {}
+        if (!empty($array) && array_keys($array) !== range(0, count($array) - 1)) {
+            if (array_reduce(array_keys($array), fn($c, $k) => $c && is_int($k), true)) {
+                $array = array_values($array);
             }
         }
 
